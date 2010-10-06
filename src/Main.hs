@@ -4,7 +4,7 @@ module Main where
 import qualified Data.StorableVector as V
 import qualified Sound.File.Sndfile as SF
 import qualified Sound.File.Sndfile.Buffer.StorableVector as BV
-import Control.Monad(forM_)
+import Control.Monad(forM_, forM)
 import Foreign.Storable(Storable)
 import Data.Function(on)
 
@@ -37,23 +37,44 @@ trim :: (Num a, Storable a) =>
         V.Vector a -> V.Vector a -> (V.Vector a, V.Vector a)
 trim x y = ((,) `on` (V.take $ minLength x y)) x y
 
--- slideCorrelate vBig vSmall = map (correlate vSmall) (V.tails vBig)
+slideCorrelate :: (Storable a, Floating a) => Int -> Int -> V.Vector a -> V.Vector a -> [a]
+slideCorrelate startSample samplesNum vBig vSmall = map (correlate vSmall) (V.tails vBig')
+    where vBig' = V.take (samplesNum + minLength vBig vSmall) . V.drop startSample $ vBig'
+
+
+testChunk :: (Storable a, Floating a, Ord a) => a -> V.Vector a -> V.Vector a -> Int -> Int -> (Int, a)
+testChunk threshold targetV templateV windowSize startSampleNum = 
+    if res > threshold 
+       then (startSampleNum, foldr (max . abs) 0 correlations)
+       else (startSampleNum, res)
+
+    where curSamples = V.drop startSampleNum targetV
+          res = abs $ correlate curSamples templateV
+          correlations = slideCorrelate 0 windowSize curSamples templateV
 
 matchTemplates :: FilePath -> [FilePath] -> IO ()
 matchTemplates inPath templatePaths = do
     (info, Just (samplesB :: BV.Buffer Double)) <- SF.readFile inPath
     let samplesV = BV.fromBuffer samplesB
+        targetLen = V.length samplesV
+        numChunks = floor $ ((fromIntegral targetLen) :: Double) / (fromIntegral skipSamplesNum)
+        skipSamplesNum = 1000
+        threshold = 0.01
+
     print $ "Input samples: " ++ (show . V.length $ samplesV)
+    print $ "Number of chunks: " ++ show numChunks
 
     forM_ templatePaths $ 
              \templatePath -> do
                (tInfo, Just (tSamplesB :: BV.Buffer Double)) <- SF.readFile templatePath
                let tSamplesV = BV.fromBuffer tSamplesB
-                   --temp = V.take 1000 tSamplesV
-                   temp = tSamplesV
+                   chunkNums = [0..numChunks]
+                   results = map (testChunk threshold samplesV tSamplesV skipSamplesNum) chunkNums
+                   filteredResults = filter (\(_,res) -> res > threshold) results
                print $ "Template '" ++ templatePath ++ "' samples: " ++ (show . V.length $ tSamplesV)
-               forM_ [1..50] $ \x -> do 
-                                print $ "Correlation " ++ (show x) ++ " - " ++ show (correlate (V.drop x samplesV) temp)
+               print filteredResults
+               return (templatePath, 
+                       foldr (\(y,res) (maxY, maxRes) -> if res > maxRes then (y,res) else (maxY, maxRes)) (0,0) filteredResults)
                --print $ "Correlations:" ++ show (take 50 $ slideCorrelate samplesV tSamplesV)
 
     --let n = V.maximum (V.map abs (BV.fromBuffer x))
@@ -63,4 +84,4 @@ matchTemplates inPath templatePaths = do
 
 
 main :: IO ()
-main = matchTemplates "test.ogg" ["test.ogg"]
+main = matchTemplates "test.ogg" ["test-template.ogg"]
