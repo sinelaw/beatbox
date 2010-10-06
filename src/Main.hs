@@ -53,12 +53,13 @@ slideCorrelate samplesNum vBig vSmall = map (correlate vSmall) (overlappingWindo
 
 
 testChunk :: (Storable a, Floating a, Ord a) => a -> V.Vector a -> V.Vector a -> Int -> Int -> (Int, a)
-testChunk threshold targetV templateV windowSize startSampleNum = 
+testChunk threshold targetV templateV windowSize windowNum = 
     if res > threshold 
        then (traceName "thres passed" startSampleNum, foldr (max . abs) 0 correlations)
        else (startSampleNum, res)
 
-    where curSamples = V.drop startSampleNum targetV
+    where startSampleNum = windowNum * windowSize
+          curSamples = V.drop startSampleNum targetV
           res = abs $ correlate curSamples templateV
           correlations = slideCorrelate windowSize curSamples templateV
 
@@ -69,7 +70,7 @@ matchTemplates inPath templatePaths = do
         targetLen = V.length samplesV
         numChunks = floor $ ((fromIntegral targetLen) :: Double) / (fromIntegral skipSamplesNum)
         skipSamplesNum = 1000
-        threshold = 0.04
+        threshold = 0.25
 
     print $ "Input samples: " ++ (show . V.length $ samplesV)
     print $ "Number of chunks: " ++ show numChunks
