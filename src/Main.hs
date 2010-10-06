@@ -8,7 +8,10 @@ import Control.Monad(forM_, forM)
 import Foreign.Storable(Storable)
 import Data.Function(on)
 
---correlate :: V.Vector a -> V.Vector a -> Int
+import Debug.Trace(trace)
+traceId x = trace (show x) x
+traceName str x = trace (str ++ " " ++ show x) x
+
 vMul2 :: (Num a, Storable a) => V.Vector a -> V.Vector a -> V.Vector a
 vMul2 = V.zipWith (*)
 
@@ -37,20 +40,27 @@ trim :: (Num a, Storable a) =>
         V.Vector a -> V.Vector a -> (V.Vector a, V.Vector a)
 trim x y = ((,) `on` (V.take $ minLength x y)) x y
 
-slideCorrelate :: (Storable a, Floating a) => Int -> Int -> V.Vector a -> V.Vector a -> [a]
-slideCorrelate startSample samplesNum vBig vSmall = map (correlate vSmall) (V.tails vBig')
-    where vBig' = V.take (samplesNum + minLength vBig vSmall) . V.drop startSample $ vBig'
+overlappingWindows :: (Storable a) => Int -> V.Vector a -> [V.Vector a]
+overlappingWindows windowSize vec = (V.take windowSize vec) : rest
+    where rest = if V.length vec >= windowSize
+                 then overlappingWindows windowSize (V.drop 1 vec)
+                 else []
+                   
+
+slideCorrelate :: (Storable a, Floating a) => Int -> V.Vector a -> V.Vector a -> [a]
+slideCorrelate samplesNum vBig vSmall = map (correlate vSmall) (overlappingWindows samplesNum vBig')
+    where vBig' = V.take (samplesNum + minLength vBig vSmall) vBig
 
 
 testChunk :: (Storable a, Floating a, Ord a) => a -> V.Vector a -> V.Vector a -> Int -> Int -> (Int, a)
 testChunk threshold targetV templateV windowSize startSampleNum = 
     if res > threshold 
-       then (startSampleNum, foldr (max . abs) 0 correlations)
+       then (traceName "thres passed" startSampleNum, foldr (max . abs) 0 correlations)
        else (startSampleNum, res)
 
     where curSamples = V.drop startSampleNum targetV
           res = abs $ correlate curSamples templateV
-          correlations = slideCorrelate 0 windowSize curSamples templateV
+          correlations = slideCorrelate windowSize curSamples templateV
 
 matchTemplates :: FilePath -> [FilePath] -> IO ()
 matchTemplates inPath templatePaths = do
@@ -59,7 +69,7 @@ matchTemplates inPath templatePaths = do
         targetLen = V.length samplesV
         numChunks = floor $ ((fromIntegral targetLen) :: Double) / (fromIntegral skipSamplesNum)
         skipSamplesNum = 1000
-        threshold = 0.01
+        threshold = 0.04
 
     print $ "Input samples: " ++ (show . V.length $ samplesV)
     print $ "Number of chunks: " ++ show numChunks
