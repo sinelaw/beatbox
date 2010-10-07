@@ -19,8 +19,9 @@ Executable beatbox
   -- .hs or .lhs file containing the Main module.
   Main-is: Main.hs
   hs-Source-Dirs: src
-  build-depends: base >=4 && <5, hsndfile-storablevector, hsndfile, storablevector
-  ghc-options: -Wall
+  build-depends: base >=4 && <5, hsndfile-vector, hsndfile, vector
+  -- storablevector
+  ghc-options: -Wall -O2
   -- Other-modules:       
   -- Build-tools:         
   
