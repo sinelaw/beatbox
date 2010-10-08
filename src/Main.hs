@@ -4,7 +4,7 @@ module Main where
 import qualified Data.Vector.Storable as V
 import qualified Sound.File.Sndfile as SF
 import qualified Sound.File.Sndfile.Buffer.Vector as BV
-import Control.Monad(forM_, forM)
+import Control.Monad(forM)
 import Foreign.Storable(Storable)
 import Data.Function(on)
 
@@ -19,7 +19,7 @@ vSum :: (Num b, Storable b) => V.Vector b -> b
 vSum = V.foldl (+) 0
 
 minLength :: (Num a, Storable a) => V.Vector a -> V.Vector a -> Int
-minLength x y = (min `on` V.length) x y
+minLength = min `on` V.length
 
 innerProduct :: (Fractional a, Num a, Storable a) => V.Vector a -> V.Vector a -> a
 innerProduct x y = vSum $ vMul2 x y
@@ -30,16 +30,18 @@ normSquared x = innerProduct x x
 norm :: (Floating a, Num a, Storable a) => V.Vector a -> a
 norm = sqrt . normSquared
 
-correlate :: (Floating a, Num a, Storable a) => V.Vector a -> V.Vector a -> a
-correlate x y = innerProduct x' y' / normalizer
-    where normalizer = ((*) `on` norm) x' y'
-          (x', y') = trim x y
+mean :: (Floating a, Num a, Storable a) => V.Vector a -> a
+mean vec = (vSum vec) / (fromIntegral . V.length $ vec)
 
--- non-commutative
-correlateNorm1 :: (Floating a, Num a, Storable a) => V.Vector a -> V.Vector a -> a
-correlateNorm1 x y = innerProduct x' y' / normalizer
-    where normalizer = normSquared x'
-          (x', y') = trim x y
+correlate :: (Floating a, Num a, Storable a) => V.Vector a -> V.Vector a -> a
+correlate x y = innerProduct x' y'
+    where (x', y') = trim x y
+
+normalize :: (Num a, Floating a, Storable a) => V.Vector a -> V.Vector a
+normalize vec = V.map normalize' vec
+    where normalize' x = (x - u) / n
+          u = mean vec
+          n = norm vec 
 
 trim :: (Num a, Storable a) =>
         V.Vector a -> V.Vector a -> (V.Vector a, V.Vector a)
@@ -52,25 +54,27 @@ overlappingWindows windowSize vec = (V.take windowSize vec) : rest
                  else []
                    
 
-slideCorrelate :: (Storable a, Floating a) => Int -> V.Vector a -> V.Vector a -> [a]
-slideCorrelate samplesNum vBig vSmall = map (correlate vSmall) (overlappingWindows minLen vBig')
+slideCorrelate :: (Storable a, Floating a) => Int -> Int -> V.Vector a -> V.Vector a -> [a]
+slideCorrelate numWindows windowSize vBig vSmall = map (correlate vSmall . normalize) (overlappingWindows windowSize vBig')
     where vBig' = V.take totalSamples vBig
-          totalSamples = samplesNum + minLen
-          minLen = minLength vBig vSmall
+          totalSamples = numWindows + windowSize
+
 
 
 testChunk :: (Storable a, Floating a, Ord a) => a -> V.Vector a -> V.Vector a -> Int -> Int -> (Int, a)
 testChunk threshold targetV templateV skipSize windowNum = 
-    traceId (startSampleNum, res)
-    -- if res > threshold 
-    --    then traceName "thres passed" (startSampleNum, foldr (max . abs) 0 correlations)
-    --    else (startSampleNum, res)
+    if firstResult > threshold 
+       then traceName "thres passed" (startSampleNum, foldr (max . abs) 0 allResults)
+       else (startSampleNum, firstResult)
 
     where startSampleNum = windowNum * skipSize
           curSamples = V.drop startSampleNum targetV
-          res = abs $ correlate templateV curSamples
-          correlations = slideCorrelate skipSize curSamples templateV
-
+          firstWindow = normalize . V.take minLen $ curSamples
+          restWindowsHead = V.drop 1 curSamples
+          firstResult = abs $ correlate templateV firstWindow
+          restResults = slideCorrelate skipSize minLen restWindowsHead templateV
+          allResults = firstResult : restResults
+          minLen = minLength targetV templateV
  
 matchTemplates :: FilePath -> [FilePath] -> IO ()
 matchTemplates inPath templatePaths = do
@@ -78,8 +82,8 @@ matchTemplates inPath templatePaths = do
     let samplesV = BV.fromBuffer samplesB
         targetLen = V.length samplesV
         numChunks = floor $ ((fromIntegral targetLen) :: Double) / (fromIntegral skipSamplesNum)
-        skipSamplesNum = 100
-        threshold = 0
+        skipSamplesNum = 10
+        threshold = 0.01
 
     print $ "Input samples: " ++ (show . V.length $ samplesV)
     print $ "Number of chunks: " ++ show numChunks
@@ -87,10 +91,12 @@ matchTemplates inPath templatePaths = do
     results <- forM templatePaths $ 
              \templatePath -> do
                (tInfo, Just (tSamplesB :: BV.Buffer Double)) <- SF.readFile templatePath
-               let tSamplesV = BV.fromBuffer tSamplesB
+               let tSamplesV = BV.fromBuffer $ tSamplesB
+                   templateNorm = norm tSamplesV
                    chunkNums = [0..numChunks]
                    results = map (testChunk threshold samplesV tSamplesV skipSamplesNum) chunkNums
                    filteredResults = filter (\(_,res) -> res > threshold) results
+                 
                --print $ "Template '" ++ templatePath ++ "' samples: " ++ (show . V.length $ tSamplesV)
                --print filteredResults
                return (templatePath, 
